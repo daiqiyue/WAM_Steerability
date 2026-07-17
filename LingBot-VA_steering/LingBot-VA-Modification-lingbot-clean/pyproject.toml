@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "LingBot_VA"
+version = "0.0.0"
+description = "LingBot-VA: A Pragmatic VA Foundation Model"
+authors = [
+    { name = "Anonymous", email = "anonymous@example.com" }
+]
+license = { file = "LICENSE.txt" }
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "diffusers>=0.36.0",
+    "transformers>=4.55.4",
+    "tokenizers>=0.21.4",
+    "tqdm",
+    "imageio",
+    "easydict",
+    "flash_attn",
+    "numpy>=1.26.4,<2"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+    "isort",
+    "mypy",
+    "huggingface-hub[cli]"
+]
+
+[project.urls]
+homepage = "https://example.com/anonymous-project"
+documentation = "https://example.com/anonymous-project"
+repository = "https://example.com/anonymous-project"
+huggingface = "https://example.com/anonymous-project"
+modelscope = "https://example.com/anonymous-project"
+discord = "https://example.com/anonymous-project"
+
+[tool.setuptools]
+packages = ["lingbot_va"]
+
+[tool.setuptools.package-data]
+"lingbot_va" = ["**/*.py"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+strict = true
+

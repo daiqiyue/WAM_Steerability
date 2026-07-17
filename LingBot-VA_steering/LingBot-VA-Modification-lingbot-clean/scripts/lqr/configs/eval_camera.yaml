@@ -1,0 +1,24 @@
+variants:
+  - name: cam_random_medium
+    kind: camera
+    pos_sigma_m: 0.05
+    rot_sigma_deg: 4.0
+    fov_sigma_deg: 2.5
+    base_seed: 42
+    enforce_visibility: true
+
+  - name: cam_random_large
+    kind: camera
+    pos_sigma_m: 0.10
+    rot_sigma_deg: 8.0
+    fov_sigma_deg: 5.0
+    base_seed: 42
+    enforce_visibility: true
+
+  - name: cam_random_xlarge
+    kind: camera
+    pos_sigma_m: 0.15
+    rot_sigma_deg: 12.0
+    fov_sigma_deg: 7.5
+    base_seed: 42
+    enforce_visibility: true

@@ -1,0 +1,14 @@
+perturbation:
+  name: cam_random_large
+  kind: camera
+  pos_sigma_m: 0.10
+  rot_sigma_deg: 8.0
+  fov_sigma_deg: 5.0
+  base_seed: 42
+  camera_name: agentview
+  enforce_visibility: true
+  workspace_table_z: 0.90
+  workspace_visible_fraction: 0.55
+  visibility_margin_px: 8
+  image_size: 128
+  max_rejection_attempts: 2000

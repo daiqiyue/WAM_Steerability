@@ -1,0 +1,8 @@
+perturbation:
+  name: cam_random_large
+  kind: camera
+  pos_sigma_m: 0.10
+  rot_sigma_deg: 8.0
+  fov_sigma_deg: 5.0
+  base_seed: 42
+  enforce_visibility: true

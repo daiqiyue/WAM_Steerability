@@ -1,0 +1,14 @@
+/.cuda-name
+/build
+*.mp4
+*.out
+*.err
+*.npz
+*.bddl
+*.json
+*.pyc
+*.executed.ipynb
+*.png
+*.zip
+*.log
+*.gif

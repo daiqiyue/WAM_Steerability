@@ -1,0 +1,9 @@
+lambda_scale: 15.0
+q_scale: 1.0
+r_scale: 5.0
+r_scale_tau: 5.0
+r_scale_final: 1000000000.0
+max_chunks: 50
+qf_scale: 1.0
+jac_dir_act: A_tilde_lingbot
+modality: action

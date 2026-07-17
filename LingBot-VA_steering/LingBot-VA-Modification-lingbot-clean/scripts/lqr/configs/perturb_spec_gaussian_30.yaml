@@ -1,0 +1,5 @@
+perturbation:
+  name: noise_extreme
+  kind: gaussian
+  sigma: 30.0
+  per_episode_seed: true

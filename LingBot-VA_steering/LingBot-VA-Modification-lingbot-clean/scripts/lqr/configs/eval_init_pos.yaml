@@ -1,0 +1,15 @@
+variants:
+  - name: xyz_random_large
+    kind: init_position
+    preset: xyz_random_large
+    base_seed: 99
+
+  - name: xyz_random_xlarge
+    kind: init_position
+    preset: xyz_random_xlarge
+    base_seed: 99
+
+  - name: xyz_random_xlarge_3
+    kind: init_position
+    preset: xyz_random_xlarge_3
+    base_seed: 99

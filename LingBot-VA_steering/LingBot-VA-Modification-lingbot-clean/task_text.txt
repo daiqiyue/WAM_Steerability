@@ -1,0 +1,11 @@
+Task 0: “Locate the alphabet soup and the tomato sauce on the table. Pick up the alphabet soup and place it inside the basket, then pick up the tomato sauce and place it inside the basket as well, making sure both items remain in the basket.” 
+Task 1: "Find the blue cream cheese box and the orange butter on the table. Pick up the cream cheese box, carry it to the basket, and place it inside. Then pick up the butter, move it to the basket, and place it inside as well, making sure both items remain in the basket."
+Task 2: "Find the stove knob. Rotate the knob to turn on the stove. Now, locate the moka pot. Pick up the moka pot, carry it to the stove burner, and carefully place the moka pot on the burner."
+Task 3: "Locate the black bowl and the bottom drawer of the cabinet. Pick up the black bowl, move it to the drawer, and place it carefully inside. Then push the bottom drawer shut until it is fully closed"
+Task 4: “Locate the white mug, the left plate, the yellow and white mug, and the right plate. Pick up the white mug and place it on the left plate, then pick up the yellow and white mug and place it on the right plate.” 
+Task 5: “Locate the book and the caddy. Pick up the book and place it carefully into the back compartment of the caddy.” 
+Task 6: “Locate the white mug, the plate, and the chocolate pudding. Pick up the white mug and place it carefully on the plate. Then locate the chocolate pudding and place it to the right of the plate, ensuring the mug remains on the plate.” 
+Task 7: "Locate the alphabet soup and the cream cheese box on the table. Pick up the alphabet soup, place it inside the basket, then pick up the cream cheese box and place it inside the basket as well, making sure both items remain in the basket."
+Task 8:  “Locate both moka pots and the stove. Pick up the first moka pot and place it carefully on the stove. Then pick up the second moka pot and place it on the stove as well, ensuring that both moka pots remain on the stove.” 
+Task 9: "Locate the yellow and white mug and the microwave. Pick up the mug, place it carefully inside the microwave, and then close the microwave door completely."
+

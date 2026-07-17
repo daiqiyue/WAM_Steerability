@@ -1,0 +1,6 @@
+lambda_scale: 1.0
+q_scale: 10000.0
+r_scale: 75000.0
+qf_scale: 1.0
+jac_dir_act: A_tilde_lingbot
+modality: video

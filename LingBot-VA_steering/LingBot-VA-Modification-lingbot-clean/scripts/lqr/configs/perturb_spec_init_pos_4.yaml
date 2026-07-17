@@ -1,0 +1,5 @@
+perturbation:
+  name: xyz_random_xlarge_3_seed42
+  kind: init_position
+  preset: xyz_random_xlarge_3
+  base_seed: 42

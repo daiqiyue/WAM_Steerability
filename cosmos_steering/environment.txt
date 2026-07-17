@@ -1,0 +1,23 @@
+# Source this file (or just `conda activate cosmos-policy`) before running
+# the code in this repo. The activate.d hook inside the env sets the HF /
+# LIBERO / LD_LIBRARY_PATH variables below — these `export` lines are
+# repeated here only as documentation / a fallback.
+
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate cosmos-policy
+
+# Fast NVMe scratch under the bhde project. Models, uv cache, and LIBERO
+# config live here; home (/u/jhong7) is shared-NFS and too slow for weights.
+export HF_HOME=/work/nvme/bhde/jhong7/huggingface
+export HF_HUB_CACHE=$HF_HOME/hub
+export TRANSFORMERS_CACHE=$HF_HUB_CACHE
+export LIBERO_CONFIG_PATH=/work/nvme/bhde/jhong7/.libero
+
+# Conda env ships ffmpeg 4 so decord 0.6.0 can find libavformat.so.58.
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+# HF token (optional, required for gated Cosmos repos).
+# Put your token in ~/.huggingface/token and it will be picked up.
+if [ -z "$HF_TOKEN" ] && [ -f "$HOME/.huggingface/token" ]; then
+    export HF_TOKEN="$(cat "$HOME/.huggingface/token")"
+fi
