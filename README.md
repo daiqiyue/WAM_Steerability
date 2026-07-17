@@ -3,9 +3,8 @@
 This repo contains the implementation for WA-LQR, and ActAdd (for WAMs).
 
 [![Paper](https://img.shields.io/badge/arXiv-2604.19018-b31b1b.svg)](https://arxiv.org/abs/2607.14943)
-<!-- [![Website](https://img.shields.io/badge/Website-Visit-blue.svg)](https://trustworthyrobotics.github.io/steering_robust_wam_site/)) (Website Under Construction) -->
+[![Website](https://img.shields.io/badge/Website-Visit-blue.svg)](https://trustworthyrobotics.github.io/steering_robust_wam_site/)
 
-Website under construction [here](https://trustworthyrobotics.github.io/steering_robust_wam_site/)
 
 
 # Usage Guide
