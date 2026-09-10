@@ -1,0 +1,5 @@
+assets: /storage/home/hcoda1/9/qdai41/workspace/ctrlwam/LIBERO/libero/libero/assets
+bddl_files: /storage/home/hcoda1/9/qdai41/workspace/ctrlwam/LIBERO/libero/libero/bddl_files
+benchmark_root: /storage/home/hcoda1/9/qdai41/workspace/ctrlwam/LIBERO/libero/libero
+datasets: /storage/scratch1/9/qdai41/dataset/LIBERO
+init_states: /storage/home/hcoda1/9/qdai41/workspace/ctrlwam/LIBERO/libero/libero/init_files

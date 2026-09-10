@@ -11,8 +11,13 @@ SUITE="${SUITE:-libero_10}"
 N_EPISODES="${N_EPISODES:-10}"
 EVAL_NUM_EPISODES="${EVAL_NUM_EPISODES:-$N_EPISODES}"
 RESOLUTION="${RESOLUTION:-256}"
+MAX_ENV_STEPS="${MAX_ENV_STEPS:-520}"
+NUM_STEPS_WAIT="${NUM_STEPS_WAIT:-10}"
 START_AT="${START_AT:-1}"
 SKIP_EVAL="${SKIP_EVAL:-1}"
+SAVE_ACTIVATIONS="${SAVE_ACTIVATIONS:-1}"
+RUN_BASELINE="${RUN_BASELINE:-1}"
+VL_BATCH_SIZE="${VL_BATCH_SIZE:-1}"
 
 WORLD_SIZE="${WORLD_SIZE:-1}"
 SVD_WORLD_SIZE="${SVD_WORLD_SIZE:-$WORLD_SIZE}"
@@ -180,7 +185,8 @@ if should_run 2; then
   else
     "$PYTHON" "$LQR_ROOT/inputs/precompute_vl_embs.py" \
       --pos-npz "$PAIR_DIR/positive.npz" --neg-npz "$PAIR_DIR/negative.npz" \
-      --out-path "$VL_EMBS_PATH" --prompt "$PROMPT" --ckpt-path "$CKPT_PATH"
+      --out-path "$VL_EMBS_PATH" --prompt "$PROMPT" --ckpt-path "$CKPT_PATH" \
+      --batch-size "$VL_BATCH_SIZE"
   fi
 fi
 
@@ -210,16 +216,28 @@ for task_id in "${_eval_tasks[@]}"; do
     driver="$LQR_ROOT/run_lqr_dit4dit_noised.py"
     extra=(--noise-sigma "$EVAL_NOISE_SIGMA" --noise-seed-base "${NOISE_SEED_BASE:-0}")
   fi
+  activation_args=()
+  if [[ "$SAVE_ACTIVATIONS" == "1" || "$SAVE_ACTIVATIONS" == "true" ]]; then
+    activation_args+=(--save-activations)
+  fi
+  baseline_args=(--no-baseline)
+  if [[ "$RUN_BASELINE" == "1" || "$RUN_BASELINE" == "true" ]]; then
+    baseline_args=(--run-baseline)
+  fi
   for ((rank=0; rank<EVAL_WORLD_SIZE; rank++)); do
     "$PYTHON" "$driver" --phase rollout --rank "$rank" --world-size "$EVAL_WORLD_SIZE" \
       --svd-dir "$SVD_DIR" --jac-dir-act "$JAC_SUBDIR" \
       --prompt "$eval_prompt" --n-episodes "$EVAL_NUM_EPISODES" \
       --suite "$SUITE" --task-id "$task_id" --resolution "$RESOLUTION" \
-      --ckpt-path "$CKPT_PATH" --out-dir "$eval_dir" --no-save-video "${extra[@]}"
+      --max-env-steps "$MAX_ENV_STEPS" --num-steps-wait "$NUM_STEPS_WAIT" \
+      --ckpt-path "$CKPT_PATH" --out-dir "$eval_dir" --no-save-video \
+      "${baseline_args[@]}" "${activation_args[@]}" "${extra[@]}"
   done
   "$PYTHON" "$driver" --phase merge --world-size "$EVAL_WORLD_SIZE" \
     --svd-dir "$SVD_DIR" --jac-dir-act "$JAC_SUBDIR" \
     --prompt "$eval_prompt" --n-episodes "$EVAL_NUM_EPISODES" \
     --suite "$SUITE" --task-id "$task_id" --resolution "$RESOLUTION" \
-    --ckpt-path "$CKPT_PATH" --out-dir "$eval_dir" --no-save-video "${extra[@]}"
+    --max-env-steps "$MAX_ENV_STEPS" --num-steps-wait "$NUM_STEPS_WAIT" \
+    --ckpt-path "$CKPT_PATH" --out-dir "$eval_dir" --no-save-video \
+    "${baseline_args[@]}" "${activation_args[@]}" "${extra[@]}"
 done

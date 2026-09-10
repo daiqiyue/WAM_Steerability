@@ -26,16 +26,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-DIT4DIT_ROOT = os.environ.get("DIT4DIT_ROOT",
-    str(Path(__file__).resolve().parents[2]))
-if DIT4DIT_ROOT not in sys.path:
-    sys.path.insert(0, DIT4DIT_ROOT)
+DIT4DIT_CODE_ROOT = os.environ.get(
+    "DIT4DIT_CODE_ROOT", os.environ.get("DIT4DIT_ROOT", str(Path(__file__).resolve().parents[2]))
+)
+if DIT4DIT_CODE_ROOT not in sys.path:
+    sys.path.insert(0, DIT4DIT_CODE_ROOT)
 
-LIBERO_HOME = os.environ.get("LIBERO_HOME", "/work/nvme/bhhv/jskifstad/LIBERO")
-if LIBERO_HOME not in sys.path:
+LIBERO_HOME = os.environ.get("LIBERO_HOME", "")
+if LIBERO_HOME and LIBERO_HOME not in sys.path:
     sys.path.insert(0, LIBERO_HOME)
 
 from deployment.model_server.tools.websocket_policy_client import WebsocketClientPolicy
+from runtime_paths import load_libero_init_states
 
 IMAGE_SIZE   = 224
 DUMMY_ACTION = [0.0] * 6 + [-1.0]
@@ -189,7 +191,7 @@ def main():
 
     task_suite  = benchmark.get_benchmark_dict()[args.suite]()
     task        = task_suite.get_task(args.task_id)
-    init_states = task_suite.get_task_init_states(args.task_id)
+    init_states = load_libero_init_states(task_suite, args.task_id)
     if args.n_episodes > init_states.shape[0]:
         raise ValueError(f"--n-episodes {args.n_episodes} > {init_states.shape[0]}")
     task_bddl = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file

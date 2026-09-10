@@ -36,21 +36,16 @@ from typing import Optional, Tuple
 # Environment setup
 # -----------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-_DIT4DIT_ROOT = _HERE.parent.parent
-if str(_DIT4DIT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_DIT4DIT_ROOT))
+_LOCAL_DIT4DIT_ROOT = _HERE.parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+from runtime_paths import configure_runtime, load_libero_init_states  # noqa: E402
+from reproducibility import (  # noqa: E402
+    annotate_inference, clone_observation, flattened_sim_state,
+)
 
-LIBERO_HOME = os.environ.get("LIBERO_HOME", "/work/nvme/bhde/jhong7/LIBERO_pkg")
-if LIBERO_HOME not in sys.path:
-    sys.path.insert(0, LIBERO_HOME)
-
-# Append FastWAM site-packages at the END so robosuite is found but
-# dit4dit's own transformers/diffusers take priority over FastWAM's.
-_FASTWAM_SITE = "/projects/bhde/jhong7/dit4dit-env/libero-sim/lib/python3.10/site-packages"
-if _FASTWAM_SITE not in sys.path:
-    sys.path.append(_FASTWAM_SITE)
+_DIT4DIT_ROOT, LIBERO_HOME = configure_runtime(_LOCAL_DIT4DIT_ROOT)
 os.environ.setdefault("LIBERO_HOME", LIBERO_HOME)
-os.environ.setdefault("LIBERO_CONFIG_PATH", os.path.join(LIBERO_HOME, "libero"))
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 
@@ -60,7 +55,10 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 DIT4DIT_ROOT = _DIT4DIT_ROOT
-CKPT_DEFAULT = str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt")
+CKPT_DEFAULT = os.environ.get(
+    "CKPT_PATH",
+    str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt"),
+)
 
 
 # -----------------------------------------------------------------------
@@ -116,6 +114,10 @@ def parse_args():
     ap.add_argument("--out-dir",    type=Path, required=True)
     ap.add_argument("--save-video", action="store_true", default=True)
     ap.add_argument("--no-save-video", dest="save_video", action="store_false")
+    ap.add_argument("--save-activations", action="store_true",
+                    help="save post-hook block activations for baseline/steered plots")
+    ap.add_argument("--save-inference-snapshots", action="store_true",
+                    help="save exact observation/model input at every policy inference")
     ap.add_argument("--tag", type=str, default=None)
     return ap.parse_args()
 
@@ -456,6 +458,9 @@ class SteeringRuntime:
         self.in_ad            = False
         self.u_norm_log       = []
         self.steering_enabled = True
+        self.trace_enabled    = False
+        self.trace_label      = None
+        self.activation_trace = []
 
     def reset_chunk(self):
         self.pass_idx = -1
@@ -469,6 +474,17 @@ class SteeringRuntime:
         if sel is None:
             return None, None
         return step, sel
+
+    def begin_trace(self, label: str):
+        self.trace_enabled = True
+        self.trace_label = label
+        self.activation_trace.clear()
+
+    def finish_trace(self):
+        self.trace_enabled = False
+        trace = self.activation_trace
+        self.activation_trace = []
+        return trace
 
 
 def install_lqr_hooks(action_dit, rt: SteeringRuntime):
@@ -577,6 +593,34 @@ def install_lqr_hooks(action_dit, rt: SteeringRuntime):
     return handles
 
 
+def install_activation_trace_hooks(action_dit, rt: SteeringRuntime):
+    """Capture post-hook action-token activations for plotting.
+
+    Register these hooks *after* ``install_lqr_hooks``.  PyTorch executes
+    forward hooks in registration order, so the captured steered points include
+    the actual LQR update while baseline points are observed unchanged.
+    """
+
+    handles = []
+    for block_idx, block in enumerate(action_dit.transformer_blocks):
+        def _capture(_module, _args, output, _block_idx=block_idx):
+            if not rt.trace_enabled or rt.in_ad:
+                return None
+            step, _ = rt.is_selected_step(rt.pass_idx)
+            if step is None:
+                return None
+            act = output[0, rt.denoise_t_start:rt.denoise_t_end, :]
+            rt.activation_trace.append({
+                "block": int(_block_idx),
+                "step": int(step),
+                "activation": act.detach().float().mean(dim=0).cpu(),
+            })
+            return None
+
+        handles.append(block.register_forward_hook(_capture))
+    return handles
+
+
 # -----------------------------------------------------------------------
 # Merge phase
 # -----------------------------------------------------------------------
@@ -643,6 +687,13 @@ def run_rollout_phase(args):
     action_horizon  = cfg.get("action_horizon", T_p_denoise)
     inner_dim       = cfg.get("inner_dim", D_flat // action_horizon)
     seed = int(args.seed if args.seed is not None else cfg.get("seed", 42))
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
     print(f"[rank {rank}/{world_size}] svd: {svd_dir}")
     print(f"[svd] sel_t={sel_t}  T_diff={T_diff}  L={L}  r={r}  "
@@ -756,6 +807,8 @@ def run_rollout_phase(args):
         lambda_scale=args.lambda_scale, vcache=vcache, lqr=lqr,
     )
     handles = install_lqr_hooks(action_dit, rt)
+    if args.save_activations:
+        handles.extend(install_activation_trace_hooks(action_dit, rt))
     print(f"[hooks] {len(handles)} hooks (1 tick + 1 cross_apply + {L-1} intra + 1 cross_compute)")
 
     # ---- Env ----
@@ -765,7 +818,7 @@ def run_rollout_phase(args):
 
     task_suite  = benchmark.get_benchmark_dict()[args.suite]()
     task        = task_suite.get_task(args.task_id)
-    init_states = task_suite.get_task_init_states(args.task_id)
+    init_states = load_libero_init_states(task_suite, args.task_id)
     if args.n_episodes > init_states.shape[0]:
         raise ValueError(f"--n-episodes {args.n_episodes} > {init_states.shape[0]}")
 
@@ -803,7 +856,7 @@ def run_rollout_phase(args):
         print(f"  note: --prompt differs from LIBERO task desc; steering uses --prompt.")
 
     # SVD scripts path (for run_denoising_loop import)
-    sys.path.insert(0, str(DIT4DIT_ROOT / "notebooks/lqr/svd"))
+    sys.path.insert(0, str(_HERE / "svd"))
     from run_partition_svd_pairs_no_action import run_denoising_loop
 
     # ---- Policy fn ----
@@ -880,13 +933,18 @@ def run_rollout_phase(args):
         # _binarize_gripper_open in eval_libero.py. (Previously inverted, which
         # made the gripper do the opposite of the policy's intent -> 0% success.)
         raw[:, 6] = np.where(norm_np[:, 6] < 0.5, 1.0, -1.0)
-        return [raw[i] for i in range(NUM_OPEN_LOOP)]
+        inference_input = {
+            "model_image": batch_images[0].copy(),
+            "state_encoded": state_enc.copy(),
+        }
+        return [raw[i] for i in range(NUM_OPEN_LOOP)], inference_input
 
     # ---- Video helper ----
-    def save_video(frames, path, fps, flip_ud=True):
+    def save_video(frames, inference_ids, path, fps, flip_ud=True):
         writer = imageio.get_writer(str(path), fps=fps)
-        for frame in frames:
-            writer.append_data(np.flipud(frame) if flip_ud else frame)
+        for frame, inference_idx in zip(frames, inference_ids):
+            shown = np.flipud(frame) if flip_ud else frame
+            writer.append_data(annotate_inference(shown, inference_idx))
         writer.close()
 
     # ---- Rollout ----
@@ -899,9 +957,15 @@ def run_rollout_phase(args):
         rt.steering_enabled = bool(steered)
         rt.reset_chunk()
         rt.u_norm_log.clear()
+        if args.save_activations:
+            rt.begin_trace("steered" if steered else "baseline")
 
         queue = deque(maxlen=NUM_OPEN_LOOP)
         frames = [obs["agentview_image"].copy()]
+        frame_inference_ids = [0]
+        inference_snapshots = []
+        executed_actions = []
+        inference_idx = -1
         chunk_idx = 0
         success = False
         t = 0
@@ -912,18 +976,40 @@ def run_rollout_phase(args):
                     if chunk_idx == 0 or chunk_idx % 5 == 0:
                         r_now = r_scale_schedule[min(chunk_idx, args.max_chunks - 1)]
                         print(f"    chunk {chunk_idx:3d}: R_SCALE={r_now:.2e}", flush=True)
-                actions = policy_fn(obs)
+                inference_idx += 1
+                sim_state = flattened_sim_state(env) if args.save_inference_snapshots else None
+                exact_obs = clone_observation(obs) if args.save_inference_snapshots else None
+                actions, inference_input = policy_fn(obs)
+                if args.save_inference_snapshots:
+                    inference_snapshots.append({
+                        "inference_idx": int(inference_idx),
+                        "env_step": int(t),
+                        "executed_action_count": int(len(executed_actions)),
+                        "observation": exact_obs,
+                        "sim_state": sim_state,
+                        "model_input": inference_input,
+                        "predicted_env_actions": np.stack(actions).astype(np.float32),
+                        "policy_seed": int(seed),
+                        "lqr_chunk_idx": int(chunk_idx),
+                        "lqr_r_scale": float(
+                            r_scale_schedule[min(chunk_idx, args.max_chunks - 1)]
+                        ) if steered else None,
+                    })
                 for a in actions:
                     queue.append(np.asarray(a, dtype=np.float32))
                 chunk_idx += 1
             a = queue.popleft()
+            executed_actions.append(a.copy())
             obs, _, done, _ = env.step(a.tolist())
             frames.append(obs["agentview_image"].copy())
+            frame_inference_ids.append(inference_idx)
             if done:
                 success = True
                 break
             t += 1
-        return success, t + args.num_steps_wait, frames, chunk_idx
+        trace = rt.finish_trace() if args.save_activations else []
+        return (success, t + args.num_steps_wait, frames, frame_inference_ids,
+                chunk_idx, trace, inference_snapshots, executed_actions)
 
     my_episodes = list(range(rank, args.n_episodes, world_size))
     print(f"[rank {rank}/{world_size}] handling {len(my_episodes)} episodes: {my_episodes}")
@@ -937,15 +1023,51 @@ def run_rollout_phase(args):
         steered = (label == "steered")
         suffix = "" if steered else "__baseline"
         t0 = time.time()
-        success, env_steps, frames, n_chunks = rollout(ep, init_states[ep], steered=steered)
+        (success, env_steps, frames, frame_inference_ids, n_chunks, trace,
+         inference_snapshots, executed_actions) = rollout(
+            ep, init_states[ep], steered=steered
+        )
         dt = time.time() - t0
         tag = "SUCCESS" if success else "FAILURE"
         video_path = None
         if args.save_video:
             video_dir = baseline_dir if not steered else out_dir
             video_path = video_dir / f"ep{ep:02d}--{tag}{suffix}.mp4"
-            save_video(frames, video_path, fps=args.video_fps)
+            save_video(frames, frame_inference_ids, video_path, fps=args.video_fps)
         sample = dict(getattr(stress_test, "_last_sample", {})) or None
+        snapshot_path = None
+        if args.save_inference_snapshots:
+            snapshot_dir = out_dir / "inference_snapshots"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = snapshot_dir / f"ep{ep:02d}__{label}.pt"
+            torch.save({
+                "format_version": 1,
+                "episode": int(ep), "condition": label, "success": bool(success),
+                "suite": args.suite, "task_id": int(args.task_id), "prompt": args.prompt,
+                "initial_state": np.asarray(init_states[ep]).copy(),
+                "env_seed": 42, "policy_seed": int(seed),
+                "perturbation": sample,
+                "num_steps_wait": int(args.num_steps_wait),
+                "inferences": inference_snapshots,
+                "executed_actions": (
+                    np.stack(executed_actions).astype(np.float32)
+                    if executed_actions else np.empty((0, 7), dtype=np.float32)
+                ),
+                "note": "observation is the exact pre-policy LIBERO obs; model_input is the exact resized policy input",
+            }, snapshot_path)
+        activation_path = None
+        if args.save_activations:
+            activation_dir = out_dir / "activations"
+            activation_dir.mkdir(parents=True, exist_ok=True)
+            activation_path = activation_dir / f"ep{ep:02d}__{label}.pt"
+            acts = torch.stack([row["activation"] for row in trace]).half()
+            torch.save({
+                "episode": int(ep), "condition": label, "success": bool(success),
+                "block": torch.tensor([row["block"] for row in trace], dtype=torch.int16),
+                "step": torch.tensor([row["step"] for row in trace], dtype=torch.int16),
+                "activation": acts,
+                "pooling": "mean over action-token horizon after all registered steering hooks",
+            }, activation_path)
         xyz_str = ("[" + ",".join(f"{v*1000:+5.1f}" for v in (sample or {}).get("xyz_delta_m", [0,0,0])) + "]"
                    if sample else "[--]")
         print(f"[ep {ep:2d}] {label:8s} {tag:7s}  steps={env_steps:4d}  "
@@ -953,6 +1075,8 @@ def run_rollout_phase(args):
         return {"success": bool(success), "env_steps": int(env_steps),
                 "n_chunks": int(n_chunks), "wall_time_s": float(dt),
                 "video_path": str(video_path) if video_path else None,
+                "snapshot_path": str(snapshot_path) if snapshot_path else None,
+                "activation_path": str(activation_path) if activation_path else None,
                 "perturbation": sample}
 
     t_total = time.time()
@@ -996,7 +1120,9 @@ def run_rollout_phase(args):
                 "task_desc_libero": task_desc_libero, "policy_prompt": args.prompt,
                 "n_episodes": int(args.n_episodes), "max_env_steps": int(max_env_steps),
                 "run_baseline": bool(args.run_baseline), "resolution": int(args.resolution),
+                "save_activations": bool(args.save_activations),
                 "video_fps": int(args.video_fps), "seed": int(seed),
+                "save_inference_snapshots": bool(args.save_inference_snapshots),
                 "num_steps_wait": int(args.num_steps_wait),
             },
             "parallel": {"world_size": world_size},

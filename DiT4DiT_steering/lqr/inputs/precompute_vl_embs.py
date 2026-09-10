@@ -28,27 +28,23 @@ import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_DIT4DIT_ROOT = _HERE.parent.parent.parent
-if str(_DIT4DIT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_DIT4DIT_ROOT))
+_LOCAL_DIT4DIT_ROOT = _HERE.parent.parent
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from runtime_paths import configure_runtime  # noqa: E402
 
-LIBERO_HOME = os.environ.get("LIBERO_HOME", "/work/nvme/bhhv/jskifstad/LIBERO")
-if LIBERO_HOME not in sys.path:
-    sys.path.insert(0, LIBERO_HOME)
-
-_FASTWAM_SITE = "/projects/bhhv/jskifstad/FastWAM/.conda/envs/fastwam/lib/python3.10/site-packages"
-if _FASTWAM_SITE not in sys.path:
-    sys.path.append(_FASTWAM_SITE)
-
+_DIT4DIT_ROOT, LIBERO_HOME = configure_runtime(_LOCAL_DIT4DIT_ROOT)
 os.environ.setdefault("LIBERO_HOME", LIBERO_HOME)
-os.environ.setdefault("LIBERO_CONFIG_PATH", os.path.join(LIBERO_HOME, "libero"))
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 DIT4DIT_ROOT = _DIT4DIT_ROOT
-CKPT_DEFAULT = str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt")
+CKPT_DEFAULT = os.environ.get(
+    "CKPT_PATH",
+    str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt"),
+)
 IMAGE_SIZE = 224
 
 
@@ -113,7 +109,7 @@ def compute_vl_embs_for_npz(npz_path, model, prompt, device, max_state_dim, batc
             batch_images.append(ex["image"])
             batch_states.append(ex["state"])
 
-        with torch.no_grad():
+        with torch.inference_mode():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 bi = model.backbone_interface.build_cosmos_inputs(
                     images=batch_images, instructions=[prompt] * len(batch_images),
@@ -132,6 +128,7 @@ def compute_vl_embs_for_npz(npz_path, model, prompt, device, max_state_dim, batc
             torch.save({"npz": str(npz_path), "obs_start": obs_start, "embs": all_embs,
                         "next_batch": batch_idx + 1}, ckpt_path)
             _log(f"    [ckpt] saved {local_end}/{N} to {ckpt_path.name}")
+        del bi, bout, vl_embs
 
     result = torch.cat(all_embs, dim=0)  # (N, seq_len, H)
     _log(f"  done: {result.shape}  {result.element_size() * result.numel() / 1e9:.2f} GB")

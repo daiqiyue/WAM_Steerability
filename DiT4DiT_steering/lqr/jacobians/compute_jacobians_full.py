@@ -37,24 +37,19 @@ from pathlib import Path
 # Environment setup
 # -----------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-_DIT4DIT_ROOT = _HERE.parent.parent.parent
-if str(_DIT4DIT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_DIT4DIT_ROOT))
+_LOCAL_DIT4DIT_ROOT = _HERE.parent.parent
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from runtime_paths import configure_runtime  # noqa: E402
 
-LIBERO_HOME = os.environ.get("LIBERO_HOME", "/work/nvme/bhhv/jskifstad/LIBERO")
-if LIBERO_HOME not in sys.path:
-    sys.path.insert(0, LIBERO_HOME)
-
-# Append FastWAM site-packages at the END so robosuite is found but
-# dit4dit's own transformers/diffusers take priority over FastWAM's.
-_FASTWAM_SITE = "/projects/bhhv/jskifstad/FastWAM/.conda/envs/fastwam/lib/python3.10/site-packages"
-if _FASTWAM_SITE not in sys.path:
-    sys.path.append(_FASTWAM_SITE)
+_DIT4DIT_ROOT, LIBERO_HOME = configure_runtime(_LOCAL_DIT4DIT_ROOT)
 os.environ.setdefault("LIBERO_HOME", LIBERO_HOME)
-os.environ.setdefault("LIBERO_CONFIG_PATH", os.path.join(LIBERO_HOME, "libero"))
 
 DIT4DIT_ROOT = _DIT4DIT_ROOT
-CKPT_DEFAULT = str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt")
+CKPT_DEFAULT = os.environ.get(
+    "CKPT_PATH",
+    str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt"),
+)
 
 
 # -----------------------------------------------------------------------
@@ -477,7 +472,7 @@ def run_worker(args: argparse.Namespace) -> int:
     # ---- Run denoising loop (no inference_mode — hooks need enable_grad locally) ----
     from DiT4DiT.model.modules.action_model.ActionDiT import FlowmatchingActionHead
     # Import the loop helper from the SVD script (same repo)
-    sys.path.insert(0, str(DIT4DIT_ROOT / "notebooks/lqr/svd"))
+    sys.path.insert(0, str(_HERE.parent / "svd"))
     from run_partition_svd_pairs_no_action import run_denoising_loop
 
     _RUN_T0[0] = time.time()

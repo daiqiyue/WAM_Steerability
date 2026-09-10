@@ -43,21 +43,13 @@ from collections import deque
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_DIT4DIT_ROOT = _HERE.parent.parent.parent
-if str(_DIT4DIT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_DIT4DIT_ROOT))
+_LOCAL_DIT4DIT_ROOT = _HERE.parent.parent
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from runtime_paths import configure_runtime, load_libero_init_states  # noqa: E402
 
-LIBERO_HOME = os.environ.get("LIBERO_HOME", "/work/nvme/bhhv/jskifstad/LIBERO")
-if LIBERO_HOME not in sys.path:
-    sys.path.insert(0, LIBERO_HOME)
-
-# Append FastWAM site-packages at the END so robosuite is found but
-# dit4dit's own transformers/diffusers take priority over FastWAM's.
-_FASTWAM_SITE = "/projects/bhhv/jskifstad/FastWAM/.conda/envs/fastwam/lib/python3.10/site-packages"
-if _FASTWAM_SITE not in sys.path:
-    sys.path.append(_FASTWAM_SITE)
+_DIT4DIT_ROOT, LIBERO_HOME = configure_runtime(_LOCAL_DIT4DIT_ROOT)
 os.environ.setdefault("LIBERO_HOME", LIBERO_HOME)
-os.environ.setdefault("LIBERO_CONFIG_PATH", os.path.join(LIBERO_HOME, "libero"))
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 
@@ -66,7 +58,10 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 DIT4DIT_ROOT = _DIT4DIT_ROOT
-CKPT_DEFAULT = str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt")
+CKPT_DEFAULT = os.environ.get(
+    "CKPT_PATH",
+    str(DIT4DIT_ROOT / "checkpoint/dit4dit-model/dit4dit_libero/final_model/pytorch_model.pt"),
+)
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 
@@ -160,7 +155,7 @@ def main() -> None:
 
     task_suite  = benchmark.get_benchmark_dict()[args.suite]()
     task        = task_suite.get_task(args.task_id)
-    init_states = task_suite.get_task_init_states(args.task_id)
+    init_states = load_libero_init_states(task_suite, args.task_id)
     n_episodes  = min(args.n_episodes, int(init_states.shape[0]))
     prompt      = args.prompt if args.prompt else task.language
     _log(f"suite={args.suite}  task={args.task_id}  episodes={n_episodes}")
