@@ -87,3 +87,8 @@ For the checked-in task-1 job, final artifacts are written below
   of all eight normalized action-horizon output tokens along the reconstructed
   contrastive activation direction; the JSON also reports continuous physical
   action-scale derivatives (the deployed gripper threshold is nondifferentiable).
+
+See [interpretability/JACOBIAN.md](interpretability/JACOBIAN.md) for the exact
+Jacobian definition, tensor dimensions, heatmap interpretation, all-step and
+all-block commands, saved-file schema, action-unit caveats, and replotting
+instructions.
