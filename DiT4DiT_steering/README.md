@@ -92,3 +92,10 @@ See [interpretability/JACOBIAN.md](interpretability/JACOBIAN.md) for the exact
 Jacobian definition, tensor dimensions, heatmap interpretation, all-step and
 all-block commands, saved-file schema, action-unit caveats, and replotting
 instructions.
+
+Gaussian-noise rollout videos display three synchronized panels: the clean
+environment agent view, the exact noisy agent view consumed by the model, and
+the exact noisy wrist view. The noisy panels remain fixed while the eight
+actions from one inference chunk execute, and update at the next labeled
+inference. Set `NOISE_OUT_DIR` when submitting the reproducible-rollout Slurm
+job to preserve an older output directory.

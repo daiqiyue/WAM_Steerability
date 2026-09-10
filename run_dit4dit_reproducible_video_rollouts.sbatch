@@ -39,7 +39,7 @@ if [[ "$SLURM_ARRAY_TASK_ID" == "0" ]]; then
   BASE="$LQR_ROOT/runs/ideas_l40s_noise_task01"
   SVD_DIR="$BASE/svd/libero10_task01_noise_sigma75.0_pairs_no_action_dsall_N-1_k64_p10_ws1_tsall"
   JAC_SUBDIR="A_tilde_full__put_both_the_cream_cheese_box_and_the_butter_in_th__vjp_no_retain__vbf16"
-  OUT_DIR="$BASE/eval_repro/noise_task01_seed42"
+  OUT_DIR="${NOISE_OUT_DIR:-$BASE/eval_repro/noise_task01_seed42}"
   DRIVER="$LQR_ROOT/run_lqr_dit4dit_noised.py"
   EXTRA=(--noise-sigma 22.0 --noise-seed-base 42000)
 else
@@ -47,7 +47,7 @@ else
   BASE="$LQR_ROOT/runs/ideas_l40s_gripper_xyz_task01"
   SVD_DIR="$BASE/svd/libero10_task01_xyz_random_xlarge_3_seed42_paired_no_action_dsall_N-1_k64_p10_ws1_tsall"
   JAC_SUBDIR="A_tilde_full__put_both_the_cream_cheese_box_and_the_butter_in_th__vjp_no_retain__vbf16"
-  OUT_DIR="$BASE/eval_repro/gripper_task01_seed42"
+  OUT_DIR="${GRIPPER_OUT_DIR:-$BASE/eval_repro/gripper_task01_seed42}"
   DRIVER="$LQR_ROOT/run_lqr_dit4dit_gripper_xyz.py"
   EXTRA=(--preset xyz_random_xlarge_3 --base-seed 42)
 fi

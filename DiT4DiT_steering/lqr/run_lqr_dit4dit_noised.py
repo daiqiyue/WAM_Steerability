@@ -38,7 +38,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 from runtime_paths import configure_runtime, load_libero_init_states  # noqa: E402
 from reproducibility import (  # noqa: E402
-    annotate_inference, clone_observation, flattened_sim_state,
+    clone_observation, compose_noisy_rollout_frame, flattened_sim_state,
 )
 
 _DIT4DIT_ROOT, LIBERO_HOME = configure_runtime(_LOCAL_DIT4DIT_ROOT)
@@ -403,10 +403,15 @@ def run_rollout_phase(args):
         }
         return [raw[i] for i in range(NUM_OPEN_LOOP)], inference_input
 
-    def save_video(frames, inference_ids, path, fps):
+    def save_video(frames, inference_ids, noisy_images_by_inference, path, fps):
         writer = imageio.get_writer(str(path), fps=fps)
         for frame, inference_idx in zip(frames, inference_ids):
-            shown = annotate_inference(np.flipud(frame), inference_idx)
+            shown = compose_noisy_rollout_frame(
+                frame,
+                noisy_images_by_inference.get(int(inference_idx)),
+                inference_idx,
+                args.noise_sigma,
+            )
             writer.append_data(shown)
         writer.close()
 
@@ -429,6 +434,7 @@ def run_rollout_phase(args):
         queue: deque = deque(maxlen=NUM_OPEN_LOOP)
         frames = [obs["agentview_image"].copy()]
         frame_inference_ids = [0]
+        noisy_images_by_inference = {}
         inference_snapshots = []
         executed_actions = []
         inference_idx = -1
@@ -443,6 +449,11 @@ def run_rollout_phase(args):
                 sim_state = flattened_sim_state(env) if args.save_inference_snapshots else None
                 exact_obs = clone_observation(obs) if args.save_inference_snapshots else None
                 actions, inference_input = policy_fn(obs, rng, steered)
+                # The current boundary frame is the observation consumed by
+                # this new action chunk. Keep the exact post-noise model input
+                # once per inference and reuse it for the chunk's video frames.
+                frame_inference_ids[-1] = inference_idx
+                noisy_images_by_inference[inference_idx] = inference_input["model_image"].copy()
                 if args.save_inference_snapshots:
                     inference_snapshots.append({
                         "inference_idx": int(inference_idx),
@@ -468,7 +479,7 @@ def run_rollout_phase(args):
             t += 1
         trace = rt.finish_trace() if args.save_activations else []
         return (success, t + args.num_steps_wait, frames, frame_inference_ids,
-                trace, inference_snapshots, executed_actions)
+                noisy_images_by_inference, trace, inference_snapshots, executed_actions)
 
     my_episodes = list(range(rank, args.n_episodes, world_size))
     print(f"[rank {rank}/{world_size}] handling {len(my_episodes)} episodes: {my_episodes}")
@@ -482,7 +493,7 @@ def run_rollout_phase(args):
         steered = (label == "steered")
         suffix  = "" if steered else "__baseline"
         t0 = time.time()
-        (success, env_steps, frames, frame_inference_ids, trace,
+        (success, env_steps, frames, frame_inference_ids, noisy_images_by_inference, trace,
          inference_snapshots, executed_actions) = rollout(
             ep, init_states[ep], steered=steered
         )
@@ -492,7 +503,10 @@ def run_rollout_phase(args):
         if args.save_video:
             vdir = baseline_dir if not steered else out_dir
             video_path = vdir / f"ep{ep:02d}--{tag}{suffix}.mp4"
-            save_video(frames, frame_inference_ids, video_path, fps=args.video_fps)
+            save_video(
+                frames, frame_inference_ids, noisy_images_by_inference,
+                video_path, fps=args.video_fps,
+            )
         snapshot_path = None
         if args.save_inference_snapshots:
             snapshot_dir = out_dir / "inference_snapshots"
@@ -554,7 +568,8 @@ def run_rollout_phase(args):
                     "R_SCALE": float(args.r_scale), "QF_SCALE": float(args.qf_scale)},
             "noise": {"sigma": float(args.noise_sigma), "seed_base": int(args.noise_seed_base),
                       "apply_to": ["primary_image", "wrist_image"],
-                      "note": "noise applied at every inference step (persistent, not one-time)"},
+                      "note": "noise applied at every inference step (persistent, not one-time)",
+                      "video_layout": ["clean_agentview", "noisy_model_agentview", "noisy_model_wrist"]},
             "rollout": {"suite": args.suite, "task_id": int(args.task_id),
                         "task_desc_libero": task_desc_libero, "policy_prompt": args.prompt,
                         "n_episodes": int(args.n_episodes), "max_env_steps": int(max_env_steps),
