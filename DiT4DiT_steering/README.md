@@ -93,6 +93,19 @@ Jacobian definition, tensor dimensions, heatmap interpretation, all-step and
 all-block commands, saved-file schema, action-unit caveats, and replotting
 instructions.
 
+Output-action success/failure separation can be analyzed in the existing 3D
+PCA views with a linear SVM using
+`interpretability/analyze_output_action_svm_3d.py`. The script fits planes for
+rollout means, complete `8 x 7` inference chunks, and individual 7D tokens. It
+reports both in-sample accuracy and grouped leave-one-rollout-out accuracy. In
+the grouped evaluation, standardization, PCA, and the SVM are refit without the
+held-out rollout, so tokens from one rollout cannot leak across train and test.
+The checked-in IDEaS wrapper is:
+
+```bash
+sbatch run_dit4dit_output_action_svm_3d.sbatch
+```
+
 Gaussian-noise rollout videos display three synchronized panels: the clean
 environment agent view, the exact noisy agent view consumed by the model, and
 the exact noisy wrist view. The noisy panels remain fixed while the eight
