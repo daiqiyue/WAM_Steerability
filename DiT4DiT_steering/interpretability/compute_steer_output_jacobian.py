@@ -20,6 +20,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -49,8 +50,76 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fd-epsilon", type=float, default=1e-2,
                    help="fallback central-difference epsilon if forward-mode AD is unsupported")
+    p.add_argument(
+        "--derivative-method", choices=("auto", "central"), default="auto",
+        help="use forward-mode AD when available, or force central difference",
+    )
+    p.add_argument(
+        "--fd-sweep-epsilons", default="",
+        help=(
+            "comma-separated positive radii for a finite-difference linearity sweep; "
+            "the fallback --fd-epsilon is included automatically"
+        ),
+    )
     p.add_argument("--out-path", type=Path, required=True)
     return p.parse_args()
+
+
+def parse_positive_floats(spec: str) -> list[float]:
+    if not spec.strip():
+        return []
+    values = sorted({float(item) for item in spec.split(",")})
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("--fd-sweep-epsilons must contain finite positive numbers")
+    return values
+
+
+def normalized_to_libero_action(
+    normalized: torch.Tensor,
+    action_high: torch.Tensor,
+    action_low: torch.Tensor,
+    action_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Apply the exact rollout post-processing before ``env.step``."""
+    clipped = normalized.clamp(-1.0, 1.0)
+    action = torch.where(
+        action_mask.unsqueeze(0),
+        0.5 * (clipped + 1.0) * (action_high - action_low).unsqueeze(0)
+        + action_low.unsqueeze(0),
+        clipped,
+    )
+    if normalized.shape[-1] >= 7:
+        action = action.clone()
+        action[:, 6] = torch.where(
+            normalized[:, 6] < 0.5,
+            torch.ones_like(normalized[:, 6]),
+            -torch.ones_like(normalized[:, 6]),
+        )
+    return action
+
+
+def relative_l2(value: torch.Tensor, reference: torch.Tensor) -> float | None:
+    denominator = float(reference.norm())
+    if denominator <= 1e-12:
+        return None
+    return float((value - reference).norm() / denominator)
+
+
+def cosine_similarity(value: torch.Tensor, reference: torch.Tensor) -> float | None:
+    denominator = float(value.norm() * reference.norm())
+    if denominator <= 1e-12:
+        return None
+    return float(torch.sum(value * reference) / denominator)
+
+
+def recursively_serializable(value: Any) -> Any:
+    if torch.is_tensor(value):
+        return value.tolist()
+    if isinstance(value, dict):
+        return {key: recursively_serializable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [recursively_serializable(item) for item in value]
+    return value
 
 
 def prepare_observation(npz_path: Path, index: int, state_dim: int):
@@ -83,6 +152,11 @@ def main() -> int:
     args = parse_args()
     if not args.ckpt_path:
         raise ValueError("--ckpt-path or CKPT_PATH is required")
+    if not math.isfinite(args.fd_epsilon) or args.fd_epsilon <= 0:
+        raise ValueError("--fd-epsilon must be finite and positive")
+    sweep_epsilons = parse_positive_floats(args.fd_sweep_epsilons)
+    if sweep_epsilons:
+        sweep_epsilons = sorted({args.fd_epsilon, *sweep_epsilons})
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg = json.loads((args.svd_dir / "config.json").read_text())
     summary = torch.load(args.svd_dir / "svd_summary.pt", map_location="cpu", weights_only=False)
@@ -137,6 +211,9 @@ def main() -> int:
         action_stats.get("mask", np.ones_like(action_high, dtype=bool)), dtype=bool
     )[:output_dims]
     unnormalize_scale = np.where(action_mask, 0.5 * (action_high - action_low), 1.0)
+    action_high_t = torch.from_numpy(action_high)
+    action_low_t = torch.from_numpy(action_low)
+    action_mask_t = torch.from_numpy(action_mask)
     n_steps = int(cfg["sampling_steps"])
     state_tokens = 1 if action_model.state_encoder is not None else 0
     gen = torch.Generator(device=device).manual_seed(args.seed)
@@ -184,6 +261,7 @@ def main() -> int:
         return actions[0, :, :output_dims].float()
 
     records = {}
+    shared_baseline_output: torch.Tensor | None = None
     for step in steps:
         for block in blocks:
             direction, raw_norm, v_path = direction_for(args.svd_dir, cfg, summary, block, step)
@@ -194,21 +272,152 @@ def main() -> int:
                                     enabled=device.type == "cuda"):
                     return final_actions(alpha, block, step, direction)
 
-            method = "torch.func.jvp"
-            try:
-                output, derivative = torch.func.jvp(
-                    fn, (alpha0,), (torch.ones_like(alpha0),), strict=False
-                )
-            except Exception as exc:  # some fused attention kernels lack forward AD
-                method = f"central_difference_fallback ({type(exc).__name__})"
+            pair_cache: dict[float, tuple[torch.Tensor, torch.Tensor]] = {}
+
+            def pair_for(radius: float) -> tuple[torch.Tensor, torch.Tensor]:
+                key = float(radius)
+                if key not in pair_cache:
+                    with torch.no_grad():
+                        plus = fn(alpha0 + key).detach().cpu()
+                        minus = fn(alpha0 - key).detach().cpu()
+                    pair_cache[key] = (plus, minus)
+                return pair_cache[key]
+
+            if shared_baseline_output is None:
                 with torch.no_grad():
-                    output = fn(alpha0)
-                    derivative = (fn(alpha0 + args.fd_epsilon) - fn(alpha0 - args.fd_epsilon)) / (
-                        2.0 * args.fd_epsilon
+                    shared_baseline_output = fn(alpha0).detach().cpu()
+            output = shared_baseline_output.clone()
+
+            method = "torch.func.jvp"
+            if args.derivative_method == "auto":
+                try:
+                    _, derivative = torch.func.jvp(
+                        fn, (alpha0,), (torch.ones_like(alpha0),), strict=False
                     )
-            derivative = derivative.detach().cpu()
-            output = output.detach().cpu()
+                    derivative = derivative.detach().cpu()
+                except Exception as exc:  # some fused attention kernels lack forward AD
+                    method = f"central_difference_fallback ({type(exc).__name__})"
+                    plus, minus = pair_for(args.fd_epsilon)
+                    derivative = (plus - minus) / (2.0 * args.fd_epsilon)
+            else:
+                method = f"central_difference (epsilon={args.fd_epsilon:g})"
+                plus, minus = pair_for(args.fd_epsilon)
+                derivative = (plus - minus) / (2.0 * args.fd_epsilon)
+
             derivative_physical = derivative * torch.from_numpy(unnormalize_scale)
+            baseline_libero = normalized_to_libero_action(
+                output, action_high_t, action_low_t, action_mask_t
+            )
+
+            finite_difference_sweep: dict[str, dict[str, Any]] = {}
+            for radius in sweep_epsilons:
+                plus, minus = pair_for(radius)
+                normalized_central_rate = (plus - minus) / (2.0 * radius)
+                normalized_positive_delta = plus - output
+                normalized_negative_delta = minus - output
+                normalized_positive_rate = normalized_positive_delta / radius
+                normalized_negative_rate = (output - minus) / radius
+
+                plus_libero = normalized_to_libero_action(
+                    plus, action_high_t, action_low_t, action_mask_t
+                )
+                minus_libero = normalized_to_libero_action(
+                    minus, action_high_t, action_low_t, action_mask_t
+                )
+                libero_central_rate = (plus_libero - minus_libero) / (2.0 * radius)
+                libero_positive_delta = plus_libero - baseline_libero
+                libero_negative_delta = minus_libero - baseline_libero
+                libero_positive_rate = libero_positive_delta / radius
+                libero_negative_rate = (baseline_libero - minus_libero) / radius
+                continuous_dims = min(6, output_dims)
+
+                finite_difference_sweep[f"{radius:g}"] = {
+                    "epsilon": radius,
+                    "normalized_output_at_positive_alpha": plus,
+                    "normalized_output_at_negative_alpha": minus,
+                    "normalized_central_rate": normalized_central_rate,
+                    "normalized_positive_delta": normalized_positive_delta,
+                    "normalized_negative_delta": normalized_negative_delta,
+                    "normalized_positive_rate": normalized_positive_rate,
+                    "normalized_negative_rate": normalized_negative_rate,
+                    "normalized_central_rate_l2": float(normalized_central_rate.norm()),
+                    "normalized_positive_delta_l2": float(normalized_positive_delta.norm()),
+                    "normalized_negative_delta_l2": float(normalized_negative_delta.norm()),
+                    "libero_action_at_positive_alpha": plus_libero,
+                    "libero_action_at_negative_alpha": minus_libero,
+                    "libero_central_rate": libero_central_rate,
+                    "libero_positive_delta": libero_positive_delta,
+                    "libero_negative_delta": libero_negative_delta,
+                    "libero_positive_rate": libero_positive_rate,
+                    "libero_negative_rate": libero_negative_rate,
+                    "libero_central_rate_l2": float(libero_central_rate.norm()),
+                    "libero_positive_delta_l2": float(libero_positive_delta.norm()),
+                    "libero_negative_delta_l2": float(libero_negative_delta.norm()),
+                    "libero_positive_delta_continuous_l2": float(
+                        libero_positive_delta[:, :continuous_dims].norm()
+                    ),
+                    "libero_positive_delta_max_abs": float(libero_positive_delta.abs().max()),
+                    "positive_gripper_flip_count": (
+                        int(torch.count_nonzero(libero_positive_delta[:, 6]))
+                        if output_dims >= 7 else 0
+                    ),
+                    "negative_gripper_flip_count": (
+                        int(torch.count_nonzero(libero_negative_delta[:, 6]))
+                        if output_dims >= 7 else 0
+                    ),
+                    "positive_continuous_clip_count": int(torch.count_nonzero(
+                        (plus[:, :continuous_dims] <= -1.0)
+                        | (plus[:, :continuous_dims] >= 1.0)
+                    )),
+                    "negative_continuous_clip_count": int(torch.count_nonzero(
+                        (minus[:, :continuous_dims] <= -1.0)
+                        | (minus[:, :continuous_dims] >= 1.0)
+                    )),
+                }
+
+            if finite_difference_sweep:
+                reference_key = f"{min(sweep_epsilons):g}"
+                reference = finite_difference_sweep[reference_key]
+                normalized_reference = reference["normalized_central_rate"]
+                libero_reference = reference["libero_central_rate"]
+                for sweep_row in finite_difference_sweep.values():
+                    normalized_rate = sweep_row["normalized_central_rate"]
+                    libero_rate = sweep_row["libero_central_rate"]
+                    normalized_prediction = sweep_row["epsilon"] * normalized_reference
+                    libero_prediction = sweep_row["epsilon"] * libero_reference
+                    sweep_row.update({
+                        "normalized_central_rate_difference_l2_to_reference": float(
+                            (normalized_rate - normalized_reference).norm()
+                        ),
+                        "normalized_central_rate_relative_l2_to_reference": relative_l2(
+                            normalized_rate, normalized_reference
+                        ),
+                        "normalized_central_rate_cosine_to_reference": cosine_similarity(
+                            normalized_rate, normalized_reference
+                        ),
+                        "libero_central_rate_difference_l2_to_reference": float(
+                            (libero_rate - libero_reference).norm()
+                        ),
+                        "libero_central_rate_relative_l2_to_reference": relative_l2(
+                            libero_rate, libero_reference
+                        ),
+                        "libero_central_rate_cosine_to_reference": cosine_similarity(
+                            libero_rate, libero_reference
+                        ),
+                        "normalized_positive_delta_error_l2_vs_reference_linear": float(
+                            (sweep_row["normalized_positive_delta"] - normalized_prediction).norm()
+                        ),
+                        "normalized_positive_delta_relative_error_vs_reference_linear": relative_l2(
+                            sweep_row["normalized_positive_delta"], normalized_prediction
+                        ),
+                        "libero_positive_delta_error_l2_vs_reference_linear": float(
+                            (sweep_row["libero_positive_delta"] - libero_prediction).norm()
+                        ),
+                        "libero_positive_delta_relative_error_vs_reference_linear": relative_l2(
+                            sweep_row["libero_positive_delta"], libero_prediction
+                        ),
+                    })
+
             key = f"step{step}_block{block}"
             records[key] = {
                 "step": step,
@@ -217,6 +426,7 @@ def main() -> int:
                 "contrastive_direction_raw_norm": raw_norm,
                 "contrastive_basis_path": str(v_path),
                 "baseline_normalized_action_tokens": output,
+                "baseline_libero_action_tokens": baseline_libero,
                 "d_action_tokens_d_steer_alpha": derivative,
                 "per_token_l2": derivative.norm(dim=-1),
                 "per_action_dim_l2": derivative.norm(dim=0),
@@ -226,25 +436,47 @@ def main() -> int:
                 "total_l2": float(derivative.norm()),
                 "physical_total_l2": float(derivative_physical.norm()),
                 "max_abs": float(derivative.abs().max()),
+                "finite_difference_reference_epsilon": (
+                    min(sweep_epsilons) if sweep_epsilons else None
+                ),
+                "finite_difference_sweep": finite_difference_sweep,
             }
-            print(f"{key}: method={method}, |Jv|={derivative.norm():.6g}, "
-                  f"max={derivative.abs().max():.6g}", flush=True)
+            sweep_message = ""
+            if finite_difference_sweep:
+                sweep_message = ", positive LIBERO delta L2=" + ",".join(
+                    f"a={radius:g}:{finite_difference_sweep[f'{radius:g}']['libero_positive_delta_l2']:.4g}"
+                    for radius in sweep_epsilons
+                )
+            print(
+                f"{key}: method={method}, |Jv|={derivative.norm():.6g}, "
+                f"max={derivative.abs().max():.6g}{sweep_message}",
+                flush=True,
+            )
 
     args.out_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "definition": "d final normalized action tokens / d alpha, where alpha multiplies a unit-norm reconstructed SVD contrastive activation direction",
         "physical_definition": "continuous action derivative after dataset min-max unnormalization; the deployed gripper command is subsequently thresholded and has no ordinary derivative at the threshold",
+        "finite_difference_sweep_definition": (
+            "For each epsilon h, central_rate=(a(+h)-a(-h))/(2h), "
+            "positive_delta=a(+h)-a(0), and positive_rate=positive_delta/h. "
+            "LIBERO fields apply exact clipping, dataset unnormalization, and hard "
+            "gripper thresholding to each finite inference output before differencing."
+        ),
         "prompt": args.prompt,
         "inputs_npz": str(args.inputs_npz),
         "obs_index": args.obs_index,
         "seed": args.seed,
+        "fd_epsilon": args.fd_epsilon,
+        "derivative_method_requested": args.derivative_method,
+        "fd_sweep_epsilons": sweep_epsilons,
+        "action_high": action_high,
+        "action_low": action_low,
+        "action_mask": action_mask,
         "records": records,
     }, args.out_path)
     json_path = args.out_path.with_suffix(".json")
-    serializable = {
-        key: {k: (v.tolist() if torch.is_tensor(v) else v) for k, v in row.items()}
-        for key, row in records.items()
-    }
+    serializable = recursively_serializable(records)
     json_path.write_text(json.dumps(serializable, indent=2))
 
     # Causal-effect views: rows are action-horizon output tokens and columns are

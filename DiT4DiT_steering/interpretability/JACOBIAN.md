@@ -10,11 +10,19 @@ intervention changes DiT4DiT's final action tokens. The main entry points are:
 - `plot_libero_action_jacobian.py`: apply the rollout's clipping,
   dataset-statistics unnormalization, and hard gripper threshold to plot local
   Jacobians and finite linearized changes in deployed LIBERO action units.
+- `plot_alpha_sweep.py`: compare central-difference radii and plot the exact
+  finite LIBERO action changes from independently evaluated positive-alpha
+  inferences.
 - `../../run_dit4dit_all_blocks_steps_jacobian.sbatch`: run the calculation for
   Gaussian-noise and initial-gripper-position perturbations as a two-task Slurm
   array.
 - `../../replot_dit4dit_all_jacobians.sbatch`: redraw both saved experiments
   with a colorbar placed outside the block panels.
+- `../../run_dit4dit_alpha_sweep_jacobian.sbatch`: evaluate radii
+  `0.01, 0.1, 0.5, 1` for both perturbations, all four denoising steps, and all
+  16 blocks.
+- `../../plot_dit4dit_alpha_sweep.sbatch`: compare the two completed sweeps and
+  render exact finite-action heatmaps and block/step summaries.
 
 ## Quantity being computed
 
@@ -53,6 +61,57 @@ The primary implementation uses `torch.func.jvp`. If a fused model operation
 does not support forward-mode automatic differentiation, the script records a
 fallback method and uses the central difference
 `(a(+epsilon) - a(-epsilon)) / (2 * epsilon)`.
+
+## Local derivative versus a large-radius difference
+
+At `alpha=0`, the mathematical directional derivative is the limit
+
+```text
+da/dalpha |_(0) = limit_(epsilon -> 0)
+                    [a(+epsilon) - a(-epsilon)] / (2 epsilon).
+```
+
+The value at a finite radius is a symmetric secant rate across the interval
+`[-epsilon, +epsilon]`. It estimates the same point derivative only while the
+one-dimensional map from the selected activation direction to the final output
+is locally close to affine. The complete environment dynamics do not have to
+be linear; this test concerns one fixed-observation policy inference only.
+
+Use the multi-radius mode to test that assumption directly:
+
+```bash
+"$DIT4DIT_PYTHON" \
+  DiT4DiT_steering/interpretability/compute_steer_output_jacobian.py \
+  --svd-dir /path/to/svd_directory \
+  --inputs-npz /path/to/negative.npz \
+  --ckpt-path "$CKPT_PATH" \
+  --prompt "put both the cream cheese box and the butter in the basket" \
+  --blocks all --steps all \
+  --derivative-method central \
+  --fd-epsilon 0.01 \
+  --fd-sweep-epsilons 0.01,0.1,0.5,1 \
+  --out-path /path/to/steer_output_alpha_sweep_all_blocks_steps.pt
+```
+
+For every radius `h`, this additionally saves:
+
+```text
+central_rate = [a(+h) - a(-h)] / (2h)
+positive_rate = [a(+h) - a(0)] / h
+positive_delta = a(+h) - a(0)
+```
+
+The `libero_*` versions are not first-order extrapolations. They apply the
+rollout's exact clipping, dataset-statistics unnormalization, and hard gripper
+threshold separately to `a(0)`, `a(+h)`, and `a(-h)`, then take the difference.
+Thus `libero_positive_delta` is the actual action-array change caused by that
+single finite intervention in the fixed inference. It is still not an
+end-effector displacement or the cumulative effect of a rollout.
+
+The sweep stores relative L2 disagreement and cosine alignment with the
+smallest radius. Stable magnitudes and directions support a locally linear
+interpretation. Growth in disagreement, clipping counts, or gripper flips
+shows where the small-alpha Jacobian no longer predicts the finite action.
 
 ## Reading the heatmaps
 
