@@ -7,6 +7,9 @@ intervention changes DiT4DiT's final action tokens. The main entry points are:
   selected denoising steps and transformer blocks, then save tensors and plots.
 - `replot_steer_output_jacobian.py`: regenerate the per-step heatmaps from a
   saved result without loading the policy model.
+- `plot_libero_action_jacobian.py`: apply the rollout's clipping,
+  dataset-statistics unnormalization, and hard gripper threshold to plot local
+  Jacobians and finite linearized changes in deployed LIBERO action units.
 - `../../run_dit4dit_all_blocks_steps_jacobian.sbatch`: run the calculation for
   Gaussian-noise and initial-gripper-position perturbations as a two-task Slurm
   array.
@@ -170,6 +173,29 @@ If the Jacobian tensor is already available, regenerate figures with:
 Use `--steps 0,3` to select steps or `--no-pdf` to write only PNGs. Replotting
 does not load DiT4DiT and does not require a GPU, although the provided Slurm
 wrapper uses the same site environment for convenience.
+
+## Plotting deployed LIBERO action changes
+
+Convert existing all-block/all-step JSON results without loading the model:
+
+```bash
+python DiT4DiT_steering/interpretability/plot_libero_action_jacobian.py \
+  --result gaussian_noise /path/to/noise/steer_output_jacobian_all_blocks_steps.json \
+  --result initial_gripper_position /path/to/gripper/steer_output_jacobian_all_blocks_steps.json \
+  --action-stats DiT4DiT_steering/env/checkpoint_runtime/dit4dit_libero/dataset_statistics.json \
+  --output-dir /path/to/libero_action_jacobian \
+  --delta-alpha 0.1 \
+  --selected-step 0 \
+  --selected-blocks 0,8,15
+```
+
+The local plots show `partial u_LIBERO / partial alpha` after continuous-action
+clipping and unnormalization. The finite plots first approximate the normalized
+model output as `a(alpha + Delta alpha) ~= a(alpha) + Jv * Delta alpha`, then
+apply the exact rollout post-processing. Consequently, a gripper cell is zero
+unless that finite approximation crosses the `0.5` threshold, in which case it
+jumps by `+2` or `-2`. These are controller action units passed to `env.step`,
+not centimeters, radians, or simulated end-effector displacement.
 
 ## Scope of the result
 
