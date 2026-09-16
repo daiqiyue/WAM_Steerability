@@ -112,3 +112,21 @@ the exact noisy wrist view. The noisy panels remain fixed while the eight
 actions from one inference chunk execute, and update at the next labeled
 inference. Set `NOISE_OUT_DIR` when submitting the reproducible-rollout Slurm
 job to preserve an older output directory.
+
+To branch a saved Gaussian-noise inference into matched raw and ActAdd
+continuations, use `interpretability/replay_snapshot_actadd.py`; the checked-in
+episode-6/inference-20 experiment is submitted with:
+
+```bash
+sbatch run_dit4dit_snapshot_actadd_comparison.sbatch
+```
+
+Both branches restore the saved MuJoCo state, exact first observation, Gaussian
+noise-generator state, and policy seed. The comparison video labels every
+inference and displays the clean view, exact noisy agent/wrist inputs, and
+end-effector displacement. The accompanying JSON records per-axis and L2 EEF
+displacement, success, executed inference/action counts, and whether the first
+model input was reproduced exactly. By default the wrapper uses unit-norm
+reconstructed contrastive directions, `alpha=1`, and every block/denoising
+step; all three choices are explicit command-line arguments in the Python
+entry point.
