@@ -2,11 +2,11 @@
 """Branch a saved LIBERO inference snapshot into raw and ActAdd rollouts.
 
 Both branches restore the same MuJoCo state, consume the exact saved first
-observation, restore the Gaussian-noise RNG immediately before that inference,
-and use the same policy/diffusion seed.  The steered branch adds
-``alpha * unit_contrastive_direction`` at the requested DiT blocks and
-denoising steps.  The output is a side-by-side video and a JSON/NPZ record of
-the end-effector trajectories.
+observation, and use the same policy/diffusion seed.  Gaussian-noise snapshots
+also restore the noise RNG immediately before that inference.  The steered
+branch adds ``alpha * unit_contrastive_direction`` at the requested DiT blocks
+and denoising steps.  The output is a side-by-side video and a JSON/NPZ record
+of the end-effector trajectories.
 """
 
 from __future__ import annotations
@@ -202,6 +202,7 @@ def render_branch_panel(
     eef_position: np.ndarray,
     eef_start: np.ndarray,
     finished: bool,
+    input_is_noisy: bool,
 ) -> np.ndarray:
     clean_size = 320
     inset_size = 160
@@ -246,11 +247,12 @@ def render_branch_panel(
     )
     cv2.rectangle(panel, (clean_size, header + inset_size - 24),
                   (clean_size + inset_size - 1, header + inset_size - 1), (0, 0, 0), -1)
-    cv2.putText(panel, "noisy agent input", (clean_size + 5, header + inset_size - 8),
+    input_prefix = "noisy " if input_is_noisy else ""
+    cv2.putText(panel, f"{input_prefix}agent input", (clean_size + 5, header + inset_size - 8),
                 font, 0.33, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.rectangle(panel, (clean_size, header + clean_size - 24),
                   (clean_size + inset_size - 1, header + clean_size - 1), (0, 0, 0), -1)
-    cv2.putText(panel, "noisy wrist input", (clean_size + 5, header + clean_size - 8),
+    cv2.putText(panel, f"{input_prefix}wrist input", (clean_size + 5, header + clean_size - 8),
                 font, 0.33, (255, 255, 255), 1, cv2.LINE_AA)
     if finished:
         cv2.putText(panel, "FINISHED", (clean_size - 105, 22), font, 0.5,
@@ -264,6 +266,7 @@ def write_comparison_video(
     path: Path,
     fps: int,
     alpha: float,
+    input_is_noisy: bool,
 ) -> None:
     n_frames = max(len(raw.frames), len(steered.frames))
     writer = imageio.get_writer(
@@ -277,12 +280,14 @@ def write_comparison_video(
             "RAW (ActAdd off)", raw.inference_ids[raw_index],
             raw.eef_positions[raw_index], raw.eef_positions[0],
             index >= len(raw.frames),
+            input_is_noisy,
         )
         steer_panel = render_branch_panel(
             steered.frames[steer_index], steered.noisy_images[steer_index],
             f"STEERED (ActAdd alpha={alpha:g})", steered.inference_ids[steer_index],
             steered.eef_positions[steer_index], steered.eef_positions[0],
             index >= len(steered.frames),
+            input_is_noisy,
         )
         separator = np.full((raw_panel.shape[0], 4, 3), 255, dtype=np.uint8)
         writer.append_data(np.concatenate([raw_panel, separator, steer_panel], axis=1))
@@ -308,8 +313,11 @@ def main() -> int:
         )
     source = matching[0]
     rng_state = source["model_input"].get("noise_rng_state_before")
-    if rng_state is None:
-        raise ValueError("snapshot does not contain noise_rng_state_before")
+    noise_sigma = float(snapshot.get("noise_sigma", 0.0))
+    input_is_noisy = rng_state is not None and noise_sigma > 0
+    perturbation_name = (
+        "gaussian_noise" if input_is_noisy else "initial_gripper_position"
+    )
 
     source_action_count = int(source["executed_action_count"])
     source_total_actions = int(len(snapshot["executed_actions"]))
@@ -393,21 +401,26 @@ def main() -> int:
     )
     env.seed(int(snapshot["env_seed"]))
 
-    noise_sigma = float(snapshot["noise_sigma"])
     prompt = str(snapshot["prompt"])
     saved_observation = clone_observation(source["observation"])
     saved_model_image = np.asarray(source["model_input"]["model_image"]).copy()
     saved_sim_state = np.asarray(source["sim_state"], dtype=np.float64).copy()
 
-    def policy(obs: dict, rng: np.random.Generator, steered: bool):
+    def policy(obs: dict, rng: np.random.Generator | None, steered: bool):
         primary_raw = np.ascontiguousarray(
             obs["agentview_image"][::-1, ::-1]
         ).astype(np.float32)
         wrist_raw = np.ascontiguousarray(
             obs["robot0_eye_in_hand_image"][::-1, ::-1]
         ).astype(np.float32)
-        primary_raw = add_gaussian_noise(primary_raw, rng, noise_sigma)
-        wrist_raw = add_gaussian_noise(wrist_raw, rng, noise_sigma)
+        if input_is_noisy:
+            if rng is None:
+                raise RuntimeError("Gaussian-noise replay is missing its RNG")
+            primary_raw = add_gaussian_noise(primary_raw, rng, noise_sigma)
+            wrist_raw = add_gaussian_noise(wrist_raw, rng, noise_sigma)
+        else:
+            primary_raw = primary_raw.astype(np.uint8)
+            wrist_raw = wrist_raw.astype(np.uint8)
         primary = cv2.resize(primary_raw, (224, 224), interpolation=cv2.INTER_AREA)
         wrist = cv2.resize(wrist_raw, (224, 224), interpolation=cv2.INTER_AREA)
         model_image = np.concatenate([primary, wrist], axis=1)
@@ -475,8 +488,10 @@ def main() -> int:
         )))
         print(f"[{label}] restored eef max error={restored_eef_error:.3e}", flush=True)
         obs = clone_observation(saved_observation)
-        rng = np.random.default_rng()
-        rng.bit_generator.state = copy.deepcopy(rng_state)
+        rng = None
+        if input_is_noisy:
+            rng = np.random.default_rng()
+            rng.bit_generator.state = copy.deepcopy(rng_state)
 
         frames = [obs["agentview_image"].copy()]
         inference_ids = [args.inference_index]
@@ -498,7 +513,7 @@ def main() -> int:
                 first_equal = bool(np.array_equal(model_image, saved_model_image))
                 first_max_error = int(difference.max())
                 print(
-                    f"[{label}] first noisy model input exact={first_equal} "
+                    f"[{label}] first model input exact={first_equal} "
                     f"max_abs_error={first_max_error}", flush=True,
                 )
             if not noisy_images:
@@ -543,11 +558,12 @@ def main() -> int:
         env.close()
 
     video_path = args.output_dir / (
-        f"gaussian_noise_ep{int(snapshot['episode']):02d}_inference"
+        f"{perturbation_name}_ep{int(snapshot['episode']):02d}_inference"
         f"{args.inference_index:03d}_raw_vs_actadd.mp4"
     )
     write_comparison_video(
-        raw_result, steered_result, video_path, args.video_fps, args.alpha
+        raw_result, steered_result, video_path, args.video_fps, args.alpha,
+        input_is_noisy,
     )
 
     npz_path = video_path.with_suffix(".npz")
@@ -565,6 +581,8 @@ def main() -> int:
         start = result.eef_positions[0]
         end = result.eef_positions[-1]
         delta = end - start
+        segment_lengths = np.linalg.norm(np.diff(result.eef_positions, axis=0), axis=1)
+        distances_from_start = np.linalg.norm(result.eef_positions - start, axis=1)
         return {
             "success": result.success,
             "inferences_executed": result.inference_count,
@@ -575,6 +593,10 @@ def main() -> int:
             "eef_delta_xyz_cm": 100.0 * delta,
             "eef_start_to_end_distance_m": float(np.linalg.norm(delta)),
             "eef_start_to_end_distance_cm": float(100.0 * np.linalg.norm(delta)),
+            "eef_trajectory_path_length_m": float(segment_lengths.sum()),
+            "eef_trajectory_path_length_cm": float(100.0 * segment_lengths.sum()),
+            "eef_max_distance_from_start_m": float(distances_from_start.max()),
+            "eef_max_distance_from_start_cm": float(100.0 * distances_from_start.max()),
             "first_model_input_exactly_reproduced": result.first_model_input_equal,
             "first_model_input_max_abs_error_uint8": result.first_model_input_max_abs_error,
         }
@@ -589,10 +611,13 @@ def main() -> int:
         "source_snapshot": str(args.snapshot.resolve()),
         "source_episode": int(snapshot["episode"]),
         "source_condition": snapshot["condition"],
+        "perturbation_name": perturbation_name,
+        "source_perturbation": snapshot.get("perturbation"),
         "start_inference_index": args.inference_index,
         "source_env_step": int(source["env_step"]),
-        "noise_sigma_uint8": noise_sigma,
-        "noise_seed": int(snapshot["noise_seed"]),
+        "input_is_gaussian_noised": input_is_noisy,
+        "noise_sigma_uint8": noise_sigma if input_is_noisy else None,
+        "noise_seed": int(snapshot["noise_seed"]) if input_is_noisy else None,
         "policy_seed": policy_seed,
         "actadd": {
             "alpha": args.alpha,
