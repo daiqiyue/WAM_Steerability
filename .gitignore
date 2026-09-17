@@ -15,5 +15,6 @@
 /DiT4DiT_steering/lqr/runs/
 /DiT4DiT_steering/interpretability/runs/
 /DiT4DiT_steering/upstream/
+/cosmos_steering/runs/
 /DiT4DiT_steering/env/checkpoint_runtime/dit4dit_libero/dataset_statistics.json
 /DiT4DiT_steering/env/checkpoint_runtime/dit4dit_libero/final_model/

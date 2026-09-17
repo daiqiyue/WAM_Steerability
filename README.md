@@ -559,6 +559,38 @@ cosmos_steering/directions/svd/
 cosmos_steering/notebooks/lqr/rollouts/
 ```
 
+### 7.1 Paired Cosmos ActAdd sensitivity test (task 6, Gaussian noise)
+
+`submit_cosmos_task6_actadd_sensitivity.sh` runs a leakage-controlled
+activation-space ActAdd experiment on IDEaS L40S. It uses Cosmos Policy's own
+DiT-block output hook (`output += alpha * v[layer]`); it does not edit the
+diffusion latent.
+
+The default split and controls are:
+
+- contrastive-vector collection: LIBERO-10 task 6 init states 0–9;
+- held-out evaluation: task 6 init states 20–39;
+- perturbation: fixed σ=90 Gaussian noise on primary and wrist views;
+- paired branches: two `alpha=0` repeats, `+v`, `-v`, and an independently
+  sampled per-layer random direction with the same L2 norm as `v`;
+- local probes: the exact same noisy observation and policy seed for
+  `alpha = -1, -0.5, -0.1, -0.01, 0, 0.01, 0.1, 0.5, 1`;
+- closed-loop comparison: an identical replayed unsteered prefix followed by
+  a fixed 10-chunk branch window at `|alpha|=0.1`.
+
+On the configured IDEaS workspace:
+
+```bash
+bash submit_cosmos_task6_actadd_sensitivity.sh
+```
+
+Useful overrides include `TRAIN_EPISODES`, `EVAL_EPISODES`,
+`ROWS_PER_EPISODE`, `ROLLOUT_ALPHA`, `ANCHOR_CHUNK`,
+`BRANCH_HORIZON_CHUNKS`, and `SAMPLING_STEPS`. Outputs are written under
+`cosmos_steering/runs/task6_gaussian_actadd_sensitivity_seed99/`, including
+the per-episode arrays, determinism checks, aggregate JSON/Markdown, and PNG
+plots.
+
 ## 8. Run DiT4DiT LQR
 
 Supported perturbations:
