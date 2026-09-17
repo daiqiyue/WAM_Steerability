@@ -33,7 +33,12 @@ export CUDA_MODULE_LOADING="${CUDA_MODULE_LOADING:-LAZY}"
 python - <<'PY'
 from importlib.metadata import version
 
-expected = {"robosuite": "1.4.1", "mujoco": "2.3.7"}
+expected = {
+    "robosuite": "1.4.1",
+    "mujoco": "2.3.7",
+    "transformers": "4.57.1",
+    "tokenizers": "0.22.1",
+}
 bad = []
 for package, wanted in expected.items():
     actual = version(package)
