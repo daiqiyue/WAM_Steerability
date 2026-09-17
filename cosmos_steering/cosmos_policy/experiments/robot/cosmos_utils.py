@@ -286,6 +286,27 @@ def get_model(cfg):
     if is_hf_checkpoint_path(checkpoint_path):
         print(f"Detected HuggingFace repository: {checkpoint_path}")
         checkpoint_path = download_hf_checkpoint(checkpoint_path)
+    elif os.path.isdir(checkpoint_path):
+        # A local Hugging Face snapshot is a directory containing both the
+        # policy weights and auxiliary LIBERO files.  The model loader itself
+        # expects the concrete .pt file, while callers still need the directory
+        # for dataset statistics and cached text embeddings.
+        model_dir = os.path.join(checkpoint_path, "model")
+        if os.path.isdir(model_dir):
+            checkpoint_path = model_dir
+        else:
+            pt_files = sorted(
+                os.path.join(checkpoint_path, name)
+                for name in os.listdir(checkpoint_path)
+                if name.endswith(".pt")
+            )
+            if len(pt_files) != 1:
+                raise ValueError(
+                    "Local checkpoint directory must contain exactly one .pt "
+                    f"file (found {len(pt_files)}): {cfg.ckpt_path}"
+                )
+            checkpoint_path = pt_files[0]
+        print(f"Resolved local checkpoint directory to: {checkpoint_path}")
 
     # Load the model
     model, config = load_model_from_checkpoint(
