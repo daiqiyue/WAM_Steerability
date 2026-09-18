@@ -1,0 +1,5 @@
+assets: /storage/scratch1/9/qdai41/cosmos/LIBERO/libero/libero/assets
+bddl_files: /storage/scratch1/9/qdai41/cosmos/LIBERO/libero/libero/bddl_files
+benchmark_root: /storage/scratch1/9/qdai41/cosmos/LIBERO/libero/libero
+datasets: /storage/scratch1/9/qdai41/cosmos/LIBERO/datasets
+init_states: /storage/scratch1/9/qdai41/cosmos/LIBERO/libero/libero/init_files
